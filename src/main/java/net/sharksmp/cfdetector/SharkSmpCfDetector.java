@@ -2,29 +2,29 @@ package net.sharksmp.cfdetector;
 
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
-import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.inventory.Slot;
 
-import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.time.LocalDateTime;
 import java.util.Locale;
 import java.util.regex.Pattern;
 
 public final class SharkSmpCfDetector implements ClientModInitializer {
     private static final Pattern CF_TITLE = Pattern.compile("coin\\s*flip|\\bcf\\b", Pattern.CASE_INSENSITIVE);
-    private static final Pattern OUTCOME_WORDS = Pattern.compile(
-            "\\b(win|winner|won|lose|loss|lost|heads|tails|payout|multiplier|chance|result|outcome)\\b",
+
+    // Only clear result-style phrases count. Generic words like "chance", "payout",
+    // or a button labelled "Win" are not proof of an outcome.
+    private static final Pattern WIN_TEXT = Pattern.compile(
+            "\\b(?:you\\s+(?:win|won)|your\\s+result\\s+(?:is\\s+)?(?:win|won)|(?:result|outcome|status)\\s*[:= -]\\s*(?:win|won)|winner\\s*[:=]\\s*you)\\b",
+            Pattern.CASE_INSENSITIVE);
+    private static final Pattern LOSE_TEXT = Pattern.compile(
+            "\\b(?:you\\s+(?:lose|lost)|your\\s+result\\s+(?:is\\s+)?(?:lose|lost)|(?:result|outcome|status)\\s*[:= -]\\s*(?:lose|lost)|loser\\s*[:=]\\s*you)\\b",
             Pattern.CASE_INSENSITIVE);
 
     private String lastSnapshot = "";
-    private boolean warnedThisMenu = false;
+    private String lastStatus = "";
 
     @Override
     public void onInitializeClient() {
@@ -34,64 +34,47 @@ public final class SharkSmpCfDetector implements ClientModInitializer {
     private void tick(Minecraft client) {
         if (!(client.screen instanceof AbstractContainerScreen<?> screen)) {
             lastSnapshot = "";
-            warnedThisMenu = false;
+            lastStatus = "";
             return;
         }
 
         String title = screen.getTitle().getString();
         if (!CF_TITLE.matcher(title).find()) {
             lastSnapshot = "";
-            warnedThisMenu = false;
+            lastStatus = "";
             return;
         }
 
-        StringBuilder snapshot = new StringBuilder();
-        snapshot.append("GUI title: ").append(title).append('\n');
-        boolean suspicious = OUTCOME_WORDS.matcher(title).find();
-
-        for (int i = 0; i < screen.getMenu().slots.size(); i++) {
-            Slot slot = screen.getMenu().slots.get(i);
+        StringBuilder visibleText = new StringBuilder(title);
+        for (Slot slot : screen.getMenu().slots) {
             ItemStack stack = slot.getItem();
             if (stack.isEmpty()) continue;
+            visibleText.append(' ').append(stack.getHoverName().getString());
+            visibleText.append(' ').append(stack.getComponents());
+        }
 
-            String itemName = stack.getHoverName().getString();
-            String components = stack.getComponents().toString();
-            snapshot.append("slot=").append(i)
-                    .append(" item=").append(itemName)
-                    .append(" count=").append(stack.getCount())
-                    .append(" components=").append(components)
-                    .append('\n');
+        String snapshot = visibleText.toString();
+        String normalized = snapshot.toLowerCase(Locale.ROOT);
+        boolean win = WIN_TEXT.matcher(normalized).find();
+        boolean lose = LOSE_TEXT.matcher(normalized).find();
 
-            if (OUTCOME_WORDS.matcher(itemName + " " + components).find()) {
-                suspicious = true;
+        // Conflicting or unclear text is never presented as a definite result.
+        String status = win && !lose ? "WIN TEXT FOUND"
+                : lose && !win ? "LOSE TEXT FOUND"
+                : "UNKNOWN";
+
+        if (!snapshot.equals(lastSnapshot) || !status.equals(lastStatus)) {
+            lastSnapshot = snapshot;
+            lastStatus = status;
+
+            String message = switch (status) {
+                case "WIN TEXT FOUND" -> "[CF Detector] WIN TEXT FOUND - verify it is your result.";
+                case "LOSE TEXT FOUND" -> "[CF Detector] LOSE TEXT FOUND - verify it is your result.";
+                default -> "[CF Detector] UNKNOWN - no clear result is exposed in the menu.";
+            };
+            if (client.player != null) {
+                client.player.displayClientMessage(Component.literal(message), true);
             }
-        }
-
-        String current = snapshot.toString();
-        if (!current.equals(lastSnapshot)) {
-            lastSnapshot = current;
-            appendLog("\n=== " + LocalDateTime.now() + " ===\n" + current);
-        }
-
-        if (suspicious && !warnedThisMenu) {
-            warnedThisMenu = true;
-            client.player.displayClientMessage(
-                    Component.literal("[CF Detector] Suspicious outcome-related text found in the Coin Flip GUI. Check logs/sharksmp-cf-detector.log"),
-                    false);
-        }
-    }
-
-    private void appendLog(String text) {
-        Path log = FabricLoader.getInstance().getGameDir()
-                .resolve("logs")
-                .resolve("sharksmp-cf-detector.log");
-        try {
-            Files.createDirectories(log.getParent());
-            Files.writeString(log, text, StandardCharsets.UTF_8,
-                    java.nio.file.StandardOpenOption.CREATE,
-                    java.nio.file.StandardOpenOption.APPEND);
-        } catch (IOException e) {
-            System.err.println("[SharkSMP CF Detector] Could not write audit log: " + e.getMessage());
         }
     }
 }
