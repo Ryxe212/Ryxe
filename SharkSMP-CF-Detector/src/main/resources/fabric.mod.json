@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "sharksmp_cf_detector",
+  "version": "${version}",
+  "name": "SharkSMP CF Detector",
+  "description": "Audits Coin Flip inventory data exposed to the client and logs suspicious outcome-related metadata.",
+  "environment": "client",
+  "entrypoints": {
+    "client": ["net.sharksmp.cfdetector.SharkSmpCfDetector"]
+  },
+  "depends": {
+    "fabricloader": ">=0.18.1",
+    "minecraft": "1.21.11",
+    "fabric-api": "*",
+    "java": ">=21"
+  }
+}
